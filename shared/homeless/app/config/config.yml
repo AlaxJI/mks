@@ -120,6 +120,7 @@ doctrine:
 #        result_cache_driver: apc
         dql:
             string_functions:
+                GROUP_CONCAT: Application\DoctrineExtensions\Query\Mysql\GroupConcat
                 custom_part: Application\DoctrineExtensions\Query\Mysql\CustomPart
 
 # Swiftmailer Configuration
