@@ -16,6 +16,10 @@ class ReportService
     const AGGREGATED = 'aggregated';
     const AVERAGE_COMPLETED_ITEMS = 'average_completed_items';
     const AGGREGATED2 = 'aggregated2';
+    const INCOMING = 'incoming';
+
+    const ROW_RATIO = 28.5;
+    const COLOMN_RATIO = 5.11;
 
     private $em;
     private $doc;
@@ -43,6 +47,7 @@ class ReportService
             static::AVERAGE_COMPLETED_ITEMS => 'Отчет по средней длительности пунктов сервисных планов',
             static::AGGREGATED => 'Отчет агрегированный',
             static::AGGREGATED2 => 'Отчет агрегированный 2',
+            static::INCOMING => 'Обратившиеся',
         ];
     }
 
@@ -117,6 +122,10 @@ class ReportService
 
             case static::AGGREGATED2:
                 $result = $this->aggregated2($createClientdateFrom, $createClientFromTo, $createServicedateFrom, $createServiceFromTo, $homelessReason, $disease, $breadwinner);
+                break;
+
+            case static::INCOMING:
+                $result = $this->incoming($dateFrom, $dateTo);
                 break;
         }
 
@@ -671,5 +680,63 @@ WHERE cf.code = \'breadwinner\' AND cfvcfo.client_field_option_id IN (' . implod
   WHERE c.id IN (' . implode(',', $clientsIds) . ')');
         $stmt->execute();
         return $stmt->fetchAll();
+    }
+
+    private function incoming($dateFrom = null, $dateTo = null)
+    {
+        $dateFrom = $dateFrom ? $dateFrom : '1960-01-01';
+        $dateTo = $dateTo ? $dateTo : date('Y-m-d');
+
+        $sheet = $this->doc->getActiveSheet();
+        $sheet->getCell('A1')->getStyle()->getFont()->setBold(true);
+        $sheet->getCell('A1')->getStyle()->getFont()->setSize(14);
+        $sheet->getCell('A2')->getStyle()->getFont()->setBold(true);
+        $sheet->getCell('B2')->getStyle()->getFont()->setBold(true);
+        $sheet->getColumnDimension('A')->setWidth(8.09 * self::COLOMN_RATIO);
+        $sheet->getColumnDimension('B')->setWidth(2.35 * self::COLOMN_RATIO);
+
+        $title = strtr(
+             'Подопечные, обратившиеся за период <date_from> — <date_to>',
+             [
+                 '<date_from>' => $dateFrom,
+                 '<date_to>' => $dateTo,
+             ]
+         );
+         $sheet->fromArray([[$title]]);
+         $sheet->getRowDimension(1)->setRowHeight(0.68 * self::ROW_RATIO);
+         $sheet->getRowDimension(2)->setRowHeight(0.56 * self::ROW_RATIO);
+
+        $stmt = $this->em->getConnection()->prepare('
+            SELECT
+                c.lastname,
+                c.firstname,
+                c.middlename,
+                DATE(c.created_at) created_at
+            FROM client c
+            WHERE c.created_at >= :dateFrom AND c.created_at <= :dateTo
+            ORDER BY c.created_at ASC
+        ');
+        $parameters = [
+            ':dateFrom' => $dateFrom,
+            ':dateTo' => $dateTo,
+        ];
+        $stmt->execute($parameters);
+        
+        $rows = $stmt->fetchAll();
+        $count = count($rows);
+
+        $result = [];
+        $result[] = ['Подопечный', 'Дата'];
+
+        foreach ($rows as $key => $row) {
+            $name = $row['lastname'] . ' ';
+            $name .= $row['firstname'] ? mb_substr($row['firstname'], 0, 1) . '. ' : '';
+            $name .= $row['middlename'] ? mb_substr($row['middlename'], 0, 1) . '.' : '';
+            $result[] = [$name, $row['created_at']];
+        }
+
+        $result[] = ['Итого:', $count];
+
+        return $result;
     }
 }
