@@ -16,6 +16,8 @@ class ReportService
     const AGGREGATED = 'aggregated';
     const AVERAGE_COMPLETED_ITEMS = 'average_completed_items';
     const AGGREGATED2 = 'aggregated2';
+    const ROW_RATIO = 28.5;
+    const COLOMN_RATIO = 5.11;
 
     private $em;
     private $doc;
@@ -137,20 +139,66 @@ class ReportService
      */
     private function oneOffServices($dateFrom = null, $dateTo = null, $userId = null)
     {
-        $this->doc->getActiveSheet()->fromArray([[
-            'название услуги',
-            'сколько раз она была предоставлена',
-            'скольким людям она была предоставлена',
-            'сумма'
-        ]], null, 'A1');
+        $sheet = $this->doc->getActiveSheet();
+        $sheet->getCell('A1')->getStyle()->getFont()->setBold(true);
+        $sheet->getCell('A1')->getStyle()->getFont()->setSize(14);
+        $sheet->getCell('A2')->getStyle()->getFont()->setBold(true);
+        $sheet->getCell('B2')->getStyle()->getFont()->setBold(true);
+        $sheet->getCell('C2')->getStyle()->getFont()->setBold(true);
+        $sheet->getCell('D2')->getStyle()->getFont()->setBold(true);
+        $sheet->getCell('E2')->getStyle()->getFont()->setBold(true);
+        $sheet->getColumnDimension('A')->setWidth(8.09 * self::COLOMN_RATIO);
+        $sheet->getColumnDimension('B')->setWidth(2.35 * self::COLOMN_RATIO);
+        $sheet->getColumnDimension('C')->setWidth(2.94 * self::COLOMN_RATIO);
+        $sheet->getColumnDimension('D')->setWidth(3.33 * self::COLOMN_RATIO);
+        $sheet->getColumnDimension('E')->setWidth(1.63 * self::COLOMN_RATIO);
+
+        $userName = 'всеми сотрудниками Фонда';
+
+        $dateFrom = $dateFrom ? $dateFrom : '1960-01-01';
+        $dateTo = $dateTo ? $dateTo : date('Y-m-d');
+
+        if ($userId) {
+            $stmt = $this->em->getConnection()->prepare('
+                SELECT
+                    lastname,
+                    firstname,
+                    middlename
+                FROM
+                    fos_user_user
+                WHERE
+                    id = :userId
+            ');
+            $parameters['userId'] = $userId;
+            $stmt->execute($parameters);
+            $user = $stmt->fetch();
+            $userName = 'сотрудником ';
+            $userName .= $user['lastname'] ? $user['lastname'] . ' ' : '';
+            $userName .= $user['firstname'] ? $user['firstname'] . ' ' : '';
+            $userName .= $user['middlename'] ? $user['middlename'] : '';
+            $userName = trim($userName);
+        }
+        $title = strtr(
+            'Услуги, оказанные за период <date_from> — <date_to> <user_name>',
+            [
+                '<date_from>' => $dateFrom,
+                '<date_to>' => $dateTo,
+                '<user_name>' => $userName,
+            ]
+        );
+        $sheet->fromArray([[$title]]);
+        $sheet->getRowDimension(1)->setRowHeight(0.68 * self::ROW_RATIO);
+        $sheet->getRowDimension(2)->setRowHeight(0.56 * self::ROW_RATIO);
         $query = $this->em->createQuery('
             SELECT
-                st.name
-                , COUNT(DISTINCT s.id) all_count
-                , COUNT(DISTINCT s.client) client_count
-                , SUM(s.amount) as sum_amount
+                st.name,
+                COUNT(s.id) all_count,
+                COUNT(DISTINCT s.client) client_count,
+                GROUP_CONCAT(DISTINCT CONCAT(c.lastname, \'][\', c.firstname, \'][\', c.middlename) SEPARATOR \'^|^\') clients_name,
+                SUM(s.amount) amount
             FROM AppBundle\Entity\Service s
             JOIN s.type st
+            JOIN s.client c
             WHERE s.createdAt >= :dateFrom AND s.createdAt <= :dateTo ' . ($userId ? 'AND s.createdBy = :userId' : '') . '
             GROUP BY s.type
             ORDER BY st.sort');
@@ -162,7 +210,59 @@ class ReportService
             $parameters['userId'] = $userId;
         }
         $query->setParameters($parameters);
-        return $query->getResult();
+        $rows = $query->getResult();
+        $result = [];
+        $sum = 0;
+        $rowNum = 2;
+        foreach ($rows as $key => $row) {
+            $rowNum++;
+            $sheet->getCell('E' . $rowNum)->getStyle()->getNumberFormat()->setFormatCode('# ##0');
+            $sheet->getRowDimension($rowNum)->setRowHeight(0.56 * self::ROW_RATIO);
+            $resultRow = [];
+            $resultRow[] = $row['name'];
+            $resultRow[] = $row['all_count'];
+            $resultRow[] = '';
+            $resultRow[] = $row['client_count'];
+            $resultRow[] = !empty($row['amount']) ? $row['amount'] : '';
+            $sum += !empty($row['amount']) ? $row['amount'] : 0;
+            $result[] = $resultRow;
+            $names = explode('^|^', $row['clients_name']);
+            foreach ($names as $name) {
+                $rowNum++;
+                $sheet->getRowDimension($rowNum)->setRowHeight(0.56 * self::ROW_RATIO);
+                $fio = explode('][', $name);
+                $name = $fio[0] . ' ';
+                $name .= $fio[1] ? mb_substr($fio[1], 0, 1) . '. ' : '';
+                $name .= $fio[2] ? mb_substr($fio[2], 0, 1) . '.' : '';
+                $resultRow = [];
+                $resultRow[] = '';
+                $resultRow[] = '';
+                $resultRow[] = $name;
+                $resultRow[] = '';
+                $resultRow[] = '';
+                $result[] = $resultRow;
+            }
+        }
+        $rowNum++;
+        $sheet->getCell('E' . $rowNum)->getStyle()->getNumberFormat()->setFormatCode('# ##0');
+        $sheet->getRowDimension($rowNum)->setRowHeight(0.56 * self::ROW_RATIO);
+        $resultRow = [];
+        $resultRow[] = '';
+        $resultRow[] = '';
+        $resultRow[] = '';
+        $resultRow[] = 'Итого';
+        $resultRow[] = $sum;
+        $result[] = $resultRow;
+
+        $result = array_merge([[
+            'УСЛУГА',
+            'КОЛ-ВО РАЗ',
+            'ПОДОПЕЧНЫЙ',
+            'КОЛ-ВО ЧЕЛОВЕК',
+            'СУММА',
+        ]], $result);
+
+        return $result;
     }
 
     /**
