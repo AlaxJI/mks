@@ -193,6 +193,8 @@ class ClientAdmin extends BaseAdmin
                     }
                     if ($field->getCode() == 'homelessFrom') {
                         $options['pattern'] = 'MMM y';
+                    } elseif ($field->getCode() == 'applicationDate') {
+                        $options['pattern'] = 'd MMM y г.';
                     }
                     $showMapperAdditionalInfo[count($showMapperAdditionalInfo) - 1]['add'] = ['additionalField' . $field->getCode(), $field->getShowFieldType(), $options];
                 }

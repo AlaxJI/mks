@@ -21,6 +21,10 @@ class ReportService
     const ROW_RATIO = 28.5;
     const COLOMN_RATIO = 5.11;
 
+   /**
+    *
+    * @var Doctrine\ORM\EntityManager
+    */
     private $em;
     private $doc;
 
@@ -794,8 +798,21 @@ WHERE cf.code = \'breadwinner\' AND cfvcfo.client_field_option_id IN (' . implod
 
     private function incoming($dateFrom = null, $dateTo = null)
     {
-        $dateFrom = $dateFrom ? $dateFrom : '1960-01-01';
+        $result = [];
+
         $dateTo = $dateTo ? $dateTo : date('Y-m-d');
+        
+        if (empty($dateFrom)) {
+            $dateFrom = '1960-01-01';
+            $dateWhere = '(datetime <= :dateTo OR datetime IS NULL)';
+            $parameters = [':dateTo' => $dateTo];
+        } else {
+            $dateWhere = '(datetime >= :dateFrom AND datetime <= :dateTo)';
+            $parameters = [
+                ':dateFrom' => $dateFrom,
+                ':dateTo' => $dateTo,
+            ];
+        }
 
         $sheet = $this->doc->getActiveSheet();
         $sheet->getCell('A1')->getStyle()->getFont()->setBold(true);
@@ -806,43 +823,80 @@ WHERE cf.code = \'breadwinner\' AND cfvcfo.client_field_option_id IN (' . implod
         $sheet->getColumnDimension('B')->setWidth(2.35 * self::COLOMN_RATIO);
 
         $title = strtr(
-             'Подопечные, обратившиеся за период <date_from> — <date_to>',
-             [
-                 '<date_from>' => $dateFrom,
-                 '<date_to>' => $dateTo,
-             ]
-         );
-         $sheet->fromArray([[$title]]);
-         $sheet->getRowDimension(1)->setRowHeight(0.68 * self::ROW_RATIO);
-         $sheet->getRowDimension(2)->setRowHeight(0.56 * self::ROW_RATIO);
-
+            'Подопечные, обратившиеся за период <date_from> — <date_to>',
+            [
+                '<date_from>' => $dateFrom,
+                '<date_to>' => $dateTo,
+            ]
+        );
+        $sheet->fromArray([[$title]]);
+        $sheet->getRowDimension(1)->setRowHeight(0.68 * self::ROW_RATIO);
+        $sheet->getRowDimension(2)->setRowHeight(0.56 * self::ROW_RATIO);
+        
+        /* @var $stmt Doctrine\DBAL\Driver\Statement */
         $stmt = $this->em->getConnection()->prepare('
             SELECT
-                c.lastname,
-                c.firstname,
-                c.middlename,
-                DATE(c.created_at) created_at
-            FROM client c
-            WHERE c.created_at >= :dateFrom AND c.created_at <= :dateTo
-            ORDER BY c.created_at ASC
+                id
+            FROM
+                client_field
+            WHERE
+                code = :code
+                AND enabled = 1
+                AND required = 1
+                AND enabled_for_homeless = 1
+                AND type = 4
         ');
-        $parameters = [
-            ':dateFrom' => $dateFrom,
-            ':dateTo' => $dateTo,
-        ];
+        $stmt->execute([':code' => 'applicationDate']);
+
+        $count = $stmt->rowCount();
+
+        if ($count === 0) {
+            $result[] = ['В Настройки -> Доп. поля клиентов, необходимо:'];
+            $result[] = ['    создать поле и назвать его "Дата обращения",'];
+            $result[] = ['    в качестве кода поля указать "applicationDate", '];
+            $result[] = ['    указать тип поля "Дата/время",'];
+            $result[] = ['    включить это поля для всех и для бездомных,'];
+            $result[] = ['    сделать это поле обязательным для всех и для бездомных,'];
+            $result[] = ['Если поле есть, то проверить, что его настройки соответствуют настройкам указанным выше.'];
+            return $result;
+        }
+
+        $field_id = $stmt->fetch()['id'];
+
+        $sql = '
+            SELECT
+                lastname,
+                firstname,
+                middlename,
+                IFNULL(DATE(datetime), \'Не заполнена\') AS applicationDate
+            FROM
+                client
+            LEFT JOIN
+                client_field_value
+                    ON
+                        client_field_value.client_id = client.id
+                        AND client_field_value.field_id = :field_id
+            WHERE <where_date>
+            ORDER BY datetime ASC
+        ';
+        $sql = strtr($sql, ['<where_date>' => $dateWhere]);
+
+        $stmt = $this->em->getConnection()->prepare($sql);
+
+        $parameters[':field_id'] = $field_id;
+        
         $stmt->execute($parameters);
         
         $rows = $stmt->fetchAll();
         $count = count($rows);
 
-        $result = [];
         $result[] = ['Подопечный', 'Дата'];
 
         foreach ($rows as $key => $row) {
             $name = $row['lastname'] . ' ';
             $name .= $row['firstname'] ? mb_substr($row['firstname'], 0, 1) . '. ' : '';
             $name .= $row['middlename'] ? mb_substr($row['middlename'], 0, 1) . '.' : '';
-            $result[] = [$name, $row['created_at']];
+            $result[] = [$name, $row['applicationDate']];
         }
 
         $result[] = ['Итого:', $count];
